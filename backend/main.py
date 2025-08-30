@@ -7,6 +7,7 @@ import soundfile as sf
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --- Constants ---
 FILLER_WORDS = [
@@ -34,72 +35,72 @@ app.add_middleware(
 try:
     model_size = "base.en"
     whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    print(f"✅ Whisper model '{model_size}' loaded successfully.")
+    sentiment_analyzer = SentimentIntensityAnalyzer()
+    print(f"✅ Whisper model '{model_size}' and VADER sentiment analyzer loaded successfully.")
 except Exception as e:
-    print(f"🔥 Failed to load Whisper model: {e}")
+    print(f"🔥 Failed to load an AI model: {e}")
     whisper_model = None
+    sentiment_analyzer = None
 
 # --- Helper Functions ---
 def calculate_wpm(transcript, duration_seconds):
-    """Calculates words per minute."""
     word_count = len(transcript.split())
     if duration_seconds > 0:
         return round((word_count / duration_seconds) * 60)
     return 0
 
 def count_filler_words(transcript):
-    """Counts occurrences of filler words in the transcript."""
     words = re.findall(r'\b\w+\b', transcript.lower())
     filler_counts = {filler: 0 for filler in FILLER_WORDS}
     for word in words:
         if word in filler_counts:
             filler_counts[word] += 1
-    # Return only fillers that were actually found
     return {k: v for k, v in filler_counts.items() if v > 0}
 
 def analyze_audio_quality(audio_path):
-    """Analyzes pitch, volume, and confidence from an audio file."""
     try:
         y, sr = librosa.load(audio_path, sr=16000)
-
-        # 1. Pitch Variation (Monotone vs. Dynamic)
         pitches, _ = librosa.piptrack(y=y, sr=sr)
         non_zero_pitches = pitches[pitches > 0]
-        if len(non_zero_pitches) > 0:
-            pitch_std_dev = np.std(non_zero_pitches)
-            pitch_variation = "Dynamic" if pitch_std_dev > 25 else "Monotone"
-        else:
-            pitch_variation = "N/A"
-
-        # 2. Volume Consistency (Root Mean Square energy)
+        pitch_std_dev = np.std(non_zero_pitches) if len(non_zero_pitches) > 0 else 0.0
+        pitch_variation = "Dynamic" if pitch_std_dev > 25 else "Monotone"
+        
         rms = librosa.feature.rms(y=y)[0]
-        if len(rms) > 0:
-            rms_std_dev_db = np.std(librosa.amplitude_to_db(rms))
-            # Lower std dev means more consistent volume. We convert it to a 0-100 score.
-            volume_consistency = max(0, 100 - rms_std_dev_db * 10)
-        else:
-            volume_consistency = 0
-            
-        # 3. Confidence Score (simple heuristic)
-        # A confident speaker is likely to have dynamic pitch and consistent volume.
+        rms_std_dev_db = np.std(librosa.amplitude_to_db(rms)) if len(rms) > 0 else 50.0
+        volume_consistency = max(0, 100 - rms_std_dev_db * 10)
+        
         confidence_score = (volume_consistency + (90 if pitch_variation == "Dynamic" else 50)) / 2
 
         return {
             "pitch_variation": pitch_variation,
             "volume_consistency": round(volume_consistency),
             "confidence_score": round(confidence_score),
-            # Placeholder for pause analysis which is more complex
-            "pause_analysis": "Natural", 
+            "pause_analysis": "Natural",
         }
     except Exception as e:
         print(f"🔥 Error in audio quality analysis: {e}")
-        return {
-            "pitch_variation": "Error",
-            "volume_consistency": 0,
-            "confidence_score": 0,
-            "pause_analysis": "Error",
-        }
+        return {"pitch_variation": "Error", "volume_consistency": 0, "confidence_score": 0, "pause_analysis": "Error"}
 
+def analyze_sentiment(transcript):
+    """Analyzes the sentiment of the transcript using VADER."""
+    if not sentiment_analyzer:
+        return {"pos": 0, "neu": 0, "neg": 0, "compound": 0, "label": "N/A"}
+    
+    scores = sentiment_analyzer.polarity_scores(transcript)
+    compound = scores['compound']
+    label = "Neutral"
+    if compound > 0.05:
+        label = "Positive"
+    elif compound < -0.05:
+        label = "Negative"
+        
+    return {
+        "pos": round(scores['pos'] * 100),
+        "neu": round(scores['neu'] * 100),
+        "neg": round(scores['neg'] * 100),
+        "compound": scores['compound'],
+        "label": label
+    }
 
 # --- API Endpoints ---
 @app.get("/")
@@ -108,47 +109,38 @@ def read_root():
 
 @app.post("/analyze")
 async def analyze_speech(audio_file: UploadFile = File(...)):
-    if not whisper_model:
-        raise HTTPException(status_code=500, detail="Whisper model is not available.")
+    if not whisper_model or not sentiment_analyzer:
+        raise HTTPException(status_code=500, detail="An AI model is not available.")
 
     temp_audio_path = f"temp_{audio_file.filename}"
     
     try:
-        # Save the uploaded file temporarily
-        contents = await audio_file.read()
         with open(temp_audio_path, "wb") as f:
-            f.write(contents)
+            f.write(await audio_file.read())
         
-        # --- Start Analysis ---
-        # 1. Transcription
         segments, info = whisper_model.transcribe(temp_audio_path, beam_size=5)
         full_transcript = "".join(segment.text for segment in segments).strip()
         
-        # 2. Duration and Pace (WPM)
         duration_seconds = librosa.get_duration(path=temp_audio_path)
         wpm = calculate_wpm(full_transcript, duration_seconds)
-        
-        # 3. Filler Words
         filler_word_counts = count_filler_words(full_transcript)
-        
-        # 4. Audio Quality
         audio_quality_metrics = analyze_audio_quality(temp_audio_path)
+        sentiment_scores = analyze_sentiment(full_transcript)
 
-        # --- Construct final response ---
         response = {
             "transcription": full_transcript,
             "duration": round(duration_seconds, 2),
             "wpm": wpm,
             "filler_words": filler_word_counts,
-            "audio_quality": audio_quality_metrics
+            "audio_quality": audio_quality_metrics,
+            "sentiment": sentiment_scores,
         }
-        
         return response
 
     except Exception as e:
         print(f"🔥 An error occurred during analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Clean up the temporary audio file
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
+
