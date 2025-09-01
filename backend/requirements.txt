@@ -1,13 +1,25 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-faster-whisper>=0.10.0
-vaderSentiment>=3.3.2
+# --- Web Server ---
+# For running the API and handling requests
+fastapi
+uvicorn
+python-multipart
 
-fer>=22.5.1
-mediapipe==0.10.21
-protobuf==4.25.3
-librosa>=0.10.1
-opencv-python>=4.10.0.84
-ffmpeg-python>=0.2.0
-numpy>=1.26.4
-moviepy>=1.0.3
+
+tensorflow==2.15.0
+tf-keras==2.15.0
+
+# --- Core Analysis Libraries ---
+# For facial emotion recognition (replaces fer)
+deepface
+# For audio transcription
+faster-whisper
+# For eye tracking (Face Mesh)
+mediapipe
+# For text sentiment analysis
+vaderSentiment
+
+# --- Data & Signal Processing ---
+# For numerical operations, audio, and video processing
+numpy
+librosa
+opencv-python

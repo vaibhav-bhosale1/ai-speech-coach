@@ -12,7 +12,6 @@ const StatCard = ({ title, value, subtext, colorClass = 'text-white' }) => (
     <div className="bg-gray-700 p-4 rounded-lg text-center shadow-md">
         <h3 className="text-sm text-gray-400 font-medium uppercase tracking-wider">{title}</h3>
         <p className={`text-3xl font-bold ${colorClass}`}>{value}</p>
-        {/* Only show subtext if value is a valid number */}
         {subtext && !isNaN(parseFloat(value)) && <p className="text-xs text-gray-500">{subtext}</p>}
     </div>
 );
@@ -47,7 +46,7 @@ const EmotionChart = ({ data }) => {
 
 const FillerWordsChart = ({ data }) => {
     const chartData = data ? Object.entries(data).map(([name, count]) => ({ name, count })) : [];
-    if (chartData.length === 0) return null; // Hide this chart completely if no fillers
+    if (chartData.length === 0) return null; 
     
     return (
         <div className="bg-gray-700 p-4 rounded-lg">
@@ -87,36 +86,52 @@ const AudioQualityChart = ({ data }) => {
     );
 };
 
-// --- Main Report Component ---
+// --- Main Report Component (CORRECTED LOGIC) ---
 const AnalysisReport = ({ data, onGeneratePdf }) => {
   if (!data) return null;
-  const fillerWordCount = data.filler_words ? Object.values(data.filler_words).reduce((a, b) => a + b, 0) : 0;
+
+  const noSpeechDetected = data.transcription === "No speech detected.";
+  const fillerWordCount = !noSpeechDetected && data.filler_words ? Object.values(data.filler_words).reduce((a, b) => a + b, 0) : 0;
   const getWpmColor = (wpm) => (wpm > 0 && wpm < 130 ? 'text-yellow-400' : wpm > 160 ? 'text-red-400' : 'text-green-400');
-  
+ 
   return (
     <div id="analysisReport" className="w-full max-w-4xl mx-auto bg-gray-800 rounded-xl shadow-lg p-6 space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Analysis Report</h2>
         <button onClick={onGeneratePdf} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm">Download PDF</button>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard title="Speaking Pace" value={data.wpm || 0} subtext="WPM" colorClass={getWpmColor(data.wpm)} />
-        <StatCard title="Filler Words" value={fillerWordCount} colorClass={fillerWordCount > 5 ? 'text-red-400' : 'text-green-400'} />
-        <StatCard title="Eye Contact" value={data.eye_contact?.gaze_stability ?? 'N/A'} subtext="% stability" />
-        <StatCard title="Sentiment" value={data.sentiment?.label || 'N/A'} />
-      </div>
+
+      {/* --- Always Show Transcription & Video Analysis --- */}
       <div className="bg-gray-700 p-4 rounded-lg">
         <h3 className="text-sm text-gray-400 font-medium mb-2">Transcription</h3>
         <p className="text-gray-300 whitespace-pre-wrap font-mono text-sm leading-relaxed max-h-40 overflow-y-auto">{data.transcription || ""}</p>
       </div>
+      
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* Conditional Audio Metrics */}
+        <StatCard title="Speaking Pace" value={noSpeechDetected ? 'N/A' : (data.wpm || 0)} subtext="WPM" colorClass={getWpmColor(data.wpm)} />
+        <StatCard title="Filler Words" value={noSpeechDetected ? 'N/A' : fillerWordCount} colorClass={fillerWordCount > 5 ? 'text-red-400' : 'text-green-400'} />
+        <StatCard title="Sentiment" value={noSpeechDetected ? 'N/A' : (data.sentiment?.label || 'N/A')} />
+        {/* Unconditional Video Metric */}
+        <StatCard title="Eye Contact" value={data.eye_contact?.gaze_stability ?? 'N/A'} subtext="% stability" />
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Unconditional Video Chart */}
         <EmotionChart data={data.video_analysis?.emotion_distribution} />
-        <AudioQualityChart data={data.audio_quality} />
-        {fillerWordCount > 0 && <FillerWordsChart data={data.filler_words} />}
+        {/* Conditional Audio Chart */}
+        {noSpeechDetected ? (
+            <ChartPlaceholder message="Audio metrics are not available as no speech was detected." />
+        ) : (
+            <AudioQualityChart data={data.audio_quality} />
+        )}
+        {/* Conditional Filler Word Chart */}
+        {!noSpeechDetected && fillerWordCount > 0 && <FillerWordsChart data={data.filler_words} />}
       </div>
     </div>
   );
 };
+
 
 // --- Main App Component ---
 function App() {
@@ -197,7 +212,7 @@ function App() {
       setStatusText('Analysis complete. View your report below.');
     }
   };
-  
+ 
   return (
     <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 font-sans">
       <div className="w-full max-w-4xl space-y-8 py-8">
@@ -205,7 +220,7 @@ function App() {
           <h1 className="text-4xl md:text-5xl font-bold">AI Speech & Video Coach</h1>
           <p className="text-gray-400 mt-2">Get feedback on your speech and on-camera presence.</p>
         </header>
-        
+       
         <main className="flex flex-col items-center space-y-6">
           <div className="w-full max-w-2xl bg-black rounded-lg overflow-hidden aspect-video shadow-lg">
             {isRecording ? (<video ref={videoRef} autoPlay muted className="w-full h-full object-cover"></video>) 
@@ -216,7 +231,7 @@ function App() {
             <MicIcon className="w-10 h-10" />
           </button>
           <p className="text-lg h-6">{!isLoading && !analysisResult ? statusText : ''}</p>
-          
+         
           {mediaBlob && !isRecording && (
             <div className="w-full max-w-md bg-gray-800 p-4 rounded-lg">
               <button onClick={handleAnalyze} disabled={isLoading} className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed flex items-center justify-center text-white font-bold py-3 rounded-lg transition-colors">
@@ -228,7 +243,7 @@ function App() {
         </main>
 
         {analysisResult && <AnalysisReport data={analysisResult} onGeneratePdf={handleGeneratePdf} />}
-        
+       
         <footer className="text-center text-gray-500 text-sm pt-8">
           <p>Powered by FastAPI, React & Computer Vision</p>
         </footer>
@@ -238,4 +253,3 @@ function App() {
 }
 
 export default App;
-
