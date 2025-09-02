@@ -9,7 +9,6 @@ const LoaderIcon = () => (<svg className="animate-spin h-5 w-5 mr-3" viewBox="0 
 const ClipboardIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v3a2 2 0 01-2 2H4a2 2 0 01-2-2v-3z"></path></svg>);
 const CheckIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path></svg>);
 
-
 // --- Reusable UI Components ---
 const StatCard = ({ title, value, subtext, colorClass = 'text-white' }) => (
     <div className="bg-gray-700/50 p-4 rounded-lg text-center shadow-lg flex flex-col justify-center transition-all duration-300 hover:bg-gray-700/80">
@@ -32,7 +31,7 @@ const ReportSection = ({ title, children }) => (
 
 // --- Chart Components ---
 const EmotionChart = ({ data }) => {
-    const COLORS = { Happy: '#10B981', Sad: '#3B82F6', Angry: '#EF4444', Neutral: '#6B7280', Surprise: '#F59E0B', Fear: '#8B5CF6', Disgust: '#D946EF' };
+    const COLORS = { Happy: '#10B981', Sad: '#3B82F6', Angry: '#EF4444', Neutral: '#6B7280', Surprise: '#F59E0B', Fear: '#8B5CF6', Disgust: '#D946EF', Contempt: '#78716c' };
     const chartData = data ? Object.entries(data).map(([name, value]) => ({ name, value })) : [];
     if (chartData.length === 0) return <ChartPlaceholder message="No facial emotion data detected." />;
     return (
@@ -105,9 +104,9 @@ const AnalysisReport = ({ data, onGeneratePdf }) => {
             <StatCard title="Speaking Pace" value={noSpeechDetected ? 'N/A' : (data.wpm || 0)} subtext="WPM" colorClass={getWpmColor(data.wpm)} />
             <StatCard title="Filler Words" value={noSpeechDetected ? 'N/A' : fillerWordCount} colorClass={fillerWordCount > 5 ? 'text-red-400' : 'text-green-400'} />
             <StatCard title="Sentiment" value={noSpeechDetected ? 'N/A' : (data.sentiment?.label || 'N/A')} />
+            <StatCard title="Dom. Emotion" value={data.video_analysis?.dominant_emotion ?? 'N/A'} />
             <StatCard title="Eye Contact" value={data.eye_contact?.gaze_stability ?? 'N/A'} subtext="% stability" />
             <StatCard title="Posture Score" value={data.posture?.score ?? 'N/A'} subtext="/ 100" colorClass={getPostureColor(data.posture?.score)} />
-            <StatCard title="Head Tilt" value={data.posture?.tilt_status ?? 'N/A'} colorClass={getTiltColor(data.posture?.tilt_status)} />
         </div>
       </ReportSection>
 
@@ -154,7 +153,6 @@ function App() {
 
     useEffect(() => { if (stream && videoRef.current) { videoRef.current.srcObject = stream; } }, [stream]);
 
-    // CORRECTED: All handler functions are now defined INSIDE the App component
     const handleGeneratePdf = async () => {
         const reportElement = document.getElementById('analysisReport');
         if (!reportElement) return;
@@ -261,3 +259,5 @@ function App() {
 }
 
 export default App;
+
+
