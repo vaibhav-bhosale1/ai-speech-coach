@@ -4,8 +4,12 @@ backend/*.pyc
 backend/*.pyo
 backend/*.pyd
 backend/.venv/
+backend/.env
 
 
 # Environment variables
 backend/.env
 backend/*.env
+
+
+frontend/.env
