@@ -6,8 +6,9 @@ import cv2
 import subprocess
 import mediapipe as mp
 import sqlalchemy
+import asyncio
 from collections import Counter
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -35,44 +36,39 @@ except Exception as e:
     print(f"🔥 Failed to connect to Supabase: {e}")
     supabase = engine = None
 
-# --- AI Model Loading (from your code) ---
+# --- AI Model Loading ---
 try:
-    whisper_model = WhisperModel("small.en", device="cpu", compute_type="int8")
+    # Using "base.en" for a good balance of speed and accuracy in real-time
+    realtime_whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+    analysis_whisper_model = WhisperModel("small.en", device="cpu", compute_type="int8")
     sentiment_analyzer = SentimentIntensityAnalyzer()
     mp_face_mesh = mp.solutions.face_mesh
     face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.3)
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.3, min_tracking_confidence=0.3)
-    
-    # Ensure you have these model files in a 'models' directory
     face_proto = "models/deploy.prototxt"
     face_model = "models/res10_300x300_ssd_iter_140000.caffemodel"
     emotion_model_path = "models/emotion-ferplus-8.onnx"
-    
     face_net = cv2.dnn.readNet(face_proto, face_model)
     emotion_net = cv2.dnn.readNetFromONNX(emotion_model_path)
     EMOTION_LABELS = ['Neutral', 'Happy', 'Surprise', 'Sad', 'Anger', 'Disgust', 'Fear', 'Contempt']
     print("✅ AI models loaded successfully.")
 except Exception as e:
     print(f"🔥 Failed to load an AI model: {e}")
-    whisper_model = sentiment_analyzer = face_mesh = pose = face_net = emotion_net = None
+    realtime_whisper_model = analysis_whisper_model = sentiment_analyzer = face_mesh = pose = face_net = emotion_net = None
 
 # --- Authentication Dependency ---
 def get_user(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     if not token: raise HTTPException(status_code=401, detail="Auth token missing")
-    
-    # FIX: This line tells the Supabase client to act on behalf of the user
-    # for all subsequent database operations in this request.
     supabase.postgrest.auth(token)
-
     try:
         user = supabase.auth.get_user(token).user
         if not user: raise HTTPException(status_code=401, detail="Invalid token")
         return user
     except Exception: raise HTTPException(status_code=401, detail="Could not validate credentials")
 
-# --- Analysis Helper Functions (from your code) ---
+# --- Analysis Helper Functions ---
 FILLER_WORDS = ['um', 'uh', 'er', 'ah', 'like', 'okay', 'right', 'so', 'you know', 'basically', 'actually', 'literally', 'well', 'i mean']
 def calculate_wpm(transcript, duration_seconds):
     word_count = len(transcript.split())
@@ -99,7 +95,6 @@ def analyze_sentiment(transcript):
     label = "Positive" if compound > 0.05 else "Negative" if compound < -0.05 else "Neutral"
     return {"label": label, "score": scores}
 def analyze_video_features(video_path):
-    # Your full, detailed analyze_video_features function
     if not all([face_mesh, pose, face_net, emotion_net]): return {"video_analysis": {"dominant_emotion": "Error"}, "eye_contact": {"gaze_stability": "Error"}, "posture": {"score": 0}}
     cap = cv2.VideoCapture(video_path); emotions = []; forward_gaze_frames = 0; posture_scores = []; head_tilt_warnings = 0; total_frames = 0;
     LEFT_IRIS = [474, 475, 476, 477]; LEFT_EYE_CORNERS = [33, 133]
@@ -134,6 +129,48 @@ def analyze_video_features(video_path):
     if posture_scores: avg_posture_score = round(np.mean(posture_scores))
     return {"video_analysis": video_analysis_result, "eye_contact": {"gaze_stability": gaze_stability}, "posture": {"score": avg_posture_score, "tilt_status": tilt_status}}
 
+
+# --- WebSocket Endpoint for Real-time Transcription ---
+# Define constants for an overlapping audio buffer
+SAMPLE_RATE = 16000  # 16kHz
+WINDOW_SECONDS = 3   # Process 3-second chunks of audio
+STEP_SECONDS = 1.5   # Move forward 1.5 seconds at a time
+WINDOW_SIZE_BYTES = WINDOW_SECONDS * SAMPLE_RATE * 2
+STEP_SIZE_BYTES = int(STEP_SECONDS * SAMPLE_RATE * 2)
+
+@app.websocket("/ws/transcribe")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    audio_buffer = bytearray()
+    try:
+        while True:
+            audio_data = await websocket.receive_bytes()
+            audio_buffer.extend(audio_data)
+
+            # Process chunks in a sliding window
+            while len(audio_buffer) >= WINDOW_SIZE_BYTES:
+                # Get a full window of audio to process
+                chunk_to_process = audio_buffer[:WINDOW_SIZE_BYTES]
+                
+                # Remove only the step size from the buffer, keeping the overlap
+                audio_buffer = audio_buffer[STEP_SIZE_BYTES:]
+
+                # Convert and transcribe
+                audio_np = np.frombuffer(chunk_to_process, dtype=np.int16).astype(np.float32) / 32768.0
+                segments, _ = realtime_whisper_model.transcribe(audio_np, beam_size=5)
+                transcript = "".join(segment.text for segment in segments).strip()
+
+                if transcript:
+                    await websocket.send_text(transcript)
+
+    except WebSocketDisconnect:
+        print("Client disconnected from WebSocket.")
+    except Exception as e:
+        print(f"WebSocket Error: {e}")
+    finally:
+        print("WebSocket connection processing finished.")
+
+
 # --- API Endpoints ---
 @app.post("/analyze")
 async def analyze_performance(media_file: UploadFile = File(...), user=Depends(get_user)):
@@ -141,7 +178,8 @@ async def analyze_performance(media_file: UploadFile = File(...), user=Depends(g
     try:
         with open(temp_video_path, "wb") as f: f.write(await media_file.read())
         subprocess.run(['ffmpeg', '-i', temp_video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', temp_audio_path, '-y'], check=True, capture_output=True)
-        segments, _ = whisper_model.transcribe(temp_audio_path, beam_size=5, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
+        
+        segments, _ = analysis_whisper_model.transcribe(temp_audio_path, beam_size=5, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
         transcript = "".join(segment.text for segment in segments).strip()
         duration = librosa.get_duration(path=temp_audio_path)
         
@@ -154,7 +192,6 @@ async def analyze_performance(media_file: UploadFile = File(...), user=Depends(g
             **video_features
         }
         
-        # Save to Supabase
         db_payload = { "user_id": user.id, **analysis_data }
         supabase.table("speech_sessions").insert(db_payload).execute()
         return analysis_data
@@ -169,4 +206,7 @@ def get_sessions(user=Depends(get_user)):
         response = supabase.table("speech_sessions").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
         return response.data
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
-
+    
+    
+    
+    
